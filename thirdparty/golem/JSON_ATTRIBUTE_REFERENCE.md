@@ -38,6 +38,9 @@ The top-level `Report` carries metadata plus optional analysis sections.
 | `crypto`                                                 | object, optional           | Crypto-focused evidence extracted from source.  | CBOM-like enrichment and crypto policy checks.   |
 | `callGraph`                                              | object, optional           | Call graph section when enabled.                | Reachability and blast radius analysis.          |
 | `dataFlow`                                               | object, optional           | Data-flow section when enabled.                 | Source-to-sink triage and exploitability review. |
+| `apiEndpoints[]`                                         | array of `APIEndpoint`     | HTTP/RPC routes registered in the source.       | OpenAPI generation and attack-surface mapping.   |
+| `services[]`                                             | array of `ServiceEvidence` | Server-side services rolled up per framework.   | Group endpoints by owning service for review.    |
+| `externalUrls[]`                                         | array of `ExternalURL`     | Literal URLs referenced by source code.         | Egress inventory and third-party dependency map. |
 | `diagnostics`                                            | array                      | Global diagnostic messages.                     | Handling partial analysis gracefully.            |
 | `nativeBoundary[]`                                       | array of `NativeCall`      | cgo Go↔C boundary records.                      | Hybrid-project boundary auditing.                |
 | `buildShapeDeltas[]`                                     | array of `BuildShapeDelta` | Files excluded by build constraints.            | Diagnose CGO_ENABLED skew.                       |
@@ -389,6 +392,52 @@ The `crypto` section is populated from core analysis and does not require `--dat
 | `assetId`, `operationId`, `materialId` | strings | Links to crypto evidence records.      | Graph-based triage workflows.          |
 | `range.*`                              | object  | Source range.                          | Editor jump links.                     |
 | `properties`                           | object  | Optional metadata.                     | Extended pipeline integrations.        |
+
+## API endpoint reference
+
+Every HTTP or RPC route registration observed in the source lands in
+`apiEndpoints[]`. Endpoints are grouped into a `services[]` roll-up per
+framework so a consumer can render an inventory by owning service.
+
+### `APIEndpoint` fields
+
+| JSON path                    | Type              | Purpose                                                                                                                                                                                     | Typical use case                                                     |
+| ---------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `id`                         | string            | Stable identifier composed from package, kind, method, path, handler, and source position.                                                                                                  | Join key across incremental scans.                                   |
+| `kind`                       | string            | `http-route`, `http-listener`, or `rpc-service`.                                                                                                                                            | Filter service-side records from listeners.                          |
+| `framework`                  | string            | Detected framework: `gin`, `chi`, `echo`, `net/http`, `grpc`, `grpc-gateway`, `connectrpc`, `fiber`, `iris`, `beego`, `buffalo`, `fasthttp`, etc.                                          | Group endpoints by owning framework.                                 |
+| `method`                     | string            | Uppercase HTTP verb; `ANY`/`RPC`/`MIDDLEWARE` for non-verb registrations.                                                                                                                   | Route filtering per verb.                                            |
+| `path`                       | string            | Fully-composed route path with any group / router-nest prefixes already merged in. Framework-native placeholders (`:id`, `{id}`, `<id>`) are preserved.                                     | OpenAPI path generation.                                             |
+| `host`, `scheme`, `url`      | strings           | Address parts when the registration named an absolute URL.                                                                                                                                  | External-service inventory.                                          |
+| `handler`                    | string            | Handler function's short name as written at the registration site.                                                                                                                          | Cross-reference against `declarations[]`.                            |
+| `packagePath`                | string            | Go package that registered the route.                                                                                                                                                       | Ownership and blast radius.                                          |
+| `usageScope`                 | string            | `runtime`, `test`, `benchmark`, or `example`, derived from the enclosing file.                                                                                                              | Suppress non-runtime routes when gating deployments.                 |
+| `range.*`                    | object            | Source range for the registration call.                                                                                                                                                     | Editor jump links.                                                   |
+| `parameters[]`               | array, optional   | Path and query parameters lifted out of the handler's function body — `c.Param("id")`, `c.Query("name")`, `chi.URLParam(r, "name")`, etc. Best-effort; blank when the pattern is not recognized. | OpenAPI parameter generation.                                        |
+| `requestBodyType`            | string, optional  | Named type of the value bound by `c.ShouldBindJSON(&x)` / `c.Bind(&x)` / `render.DecodeJSON(r.Body, &x)`. Framework ad-hoc map aliases (`gin.H`, `echo.Map`) collapse to `object`.           | OpenAPI request-body schema.                                         |
+| `responseType`               | string, optional  | Named type of the value passed to the primary response emitter (`c.JSON(status, expr)`, `render.JSON(w, r, expr)`, etc.). Slice multiplicity is preserved (`[]User`).                       | OpenAPI response-body schema.                                        |
+| `properties`                 | object, optional  | Extension map for framework-specific hints such as `{"listener": "true", "tls": "true"}` on `ListenAndServeTLS`.                                                                            | Downstream tooling extension without schema churn.                   |
+
+### `EndpointParameter` fields
+
+| JSON path  | Type   | Purpose                                                                                                     |
+| ---------- | ------ | ----------------------------------------------------------------------------------------------------------- |
+| `name`     | string | Parameter name as written in the framework helper call.                                                    |
+| `location` | string | `path` or `query`.                                                                                          |
+| `typeName` | string | Go type of the value the handler bound. Currently `string` for the helper-based extractors.                 |
+
+Handler-signature extraction is deliberately best-effort. Handlers that
+use dynamic dispatch, closures captured through interfaces, or unrecognised
+binding APIs contribute no `parameters`/`requestBodyType`/`responseType`;
+the endpoint still ships with its method / path / handler / framework as
+before. A wrong parameter type is worse than a missing one, since
+downstream tools will happily generate the wrong schema.
+
+Supported framework patterns:
+
+- **Gin** — `c.Param("name")`, `c.Query("name")`, `c.DefaultQuery`, `c.GetQuery`, `c.ShouldBindJSON(&x)`, `c.BindJSON(&x)`, `c.Bind(&x)`, `c.ShouldBind`, `c.ShouldBindQuery`, `c.ShouldBindWith`, `c.JSON(status, expr)` and friends (`JSONP`, `IndentedJSON`, `SecureJSON`, `PureJSON`, `AsciiJSON`). Abort helpers (`AbortWithStatusJSON`) are intentionally not treated as the primary response body.
+- **chi** — `chi.URLParam(r, "name")`, `render.DecodeJSON(r.Body, &x)`, `render.Bind(r, &x)`, `render.JSON(w, r, expr)`, `render.Respond`, and `json.NewDecoder(r.Body).Decode(&x)`.
+- **Echo** — `c.Param("name")`, `c.QueryParam("name")`, `c.QueryParamDefault`, `c.Bind(&x)`, `c.BindJSON(&x)`, `c.JSON(status, expr)`, `c.JSONPretty`.
 
 ## Practical consumption patterns
 

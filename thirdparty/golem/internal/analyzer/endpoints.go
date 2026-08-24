@@ -51,6 +51,14 @@ func (a *Analyzer) endpointFactsForPackage(pkg *packages.Package) endpointFacts 
 	}
 	facts.endpoints = dedupeEndpoints(facts.endpoints)
 	facts.urls = dedupeExternalURLs(facts.urls)
+	// Enrich each endpoint with handler signature information (path/query
+	// params, request body, response type). This runs after dedup so we
+	// don't repeat the AST walk for duplicate registrations that resolve
+	// to the same endpoint id.
+	extractor := newHandlerSignatureExtractor(pkg)
+	for idx := range facts.endpoints {
+		extractor.enrich(&facts.endpoints[idx])
+	}
 	return facts
 }
 
@@ -146,11 +154,17 @@ func (a *Analyzer) endpointForCall(pkg *packages.Package, call *ast.CallExpr, gr
 	if path == "" && pathArg >= 0 && len(call.Args) > pathArg {
 		path, _ = stringLiteral(call.Args[pathArg])
 	}
-	if path == "" && kind != "http-listener" && kind != "rpc-service" {
-		return model.APIEndpoint{}, false
-	}
+	// Compose the group prefix *before* the empty-path guard so idiomatic
+	// group-root registrations like `users.GET("", handler)` — meaning
+	// "the group's root" — resolve to the group's prefix rather than
+	// being dropped as pathless. Without this reorder, every list/create
+	// endpoint hung off a Group vanishes from the report; Gin, chi, echo,
+	// iris, and fiber all use this pattern.
 	if receiver != "" {
 		path = joinRoutePath(groups[receiver], path)
+	}
+	if path == "" && kind != "http-listener" && kind != "rpc-service" {
+		return model.APIEndpoint{}, false
 	}
 	handler := ""
 	if len(call.Args) > handlerArg {

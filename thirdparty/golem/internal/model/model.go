@@ -144,19 +144,35 @@ type BuildShapeDelta struct {
 }
 
 type APIEndpoint struct {
-	ID          string            `json:"id"`
-	Kind        string            `json:"kind"`
-	Framework   string            `json:"framework,omitempty"`
-	Method      string            `json:"method,omitempty"`
-	Path        string            `json:"path,omitempty"`
-	Host        string            `json:"host,omitempty"`
-	Scheme      string            `json:"scheme,omitempty"`
-	URL         string            `json:"url,omitempty"`
-	Handler     string            `json:"handler,omitempty"`
-	PackagePath string            `json:"packagePath,omitempty"`
-	UsageScope  string            `json:"usageScope,omitempty"`
-	Range       Range             `json:"range"`
-	Properties  map[string]string `json:"properties,omitempty"`
+	ID              string              `json:"id"`
+	Kind            string              `json:"kind"`
+	Framework       string              `json:"framework,omitempty"`
+	Method          string              `json:"method,omitempty"`
+	Path            string              `json:"path,omitempty"`
+	Host            string              `json:"host,omitempty"`
+	Scheme          string              `json:"scheme,omitempty"`
+	URL             string              `json:"url,omitempty"`
+	Handler         string              `json:"handler,omitempty"`
+	PackagePath     string              `json:"packagePath,omitempty"`
+	UsageScope      string              `json:"usageScope,omitempty"`
+	Range           Range               `json:"range"`
+	Parameters      []EndpointParameter `json:"parameters,omitempty"`
+	RequestBodyType string              `json:"requestBodyType,omitempty"`
+	ResponseType    string              `json:"responseType,omitempty"`
+	Properties      map[string]string   `json:"properties,omitempty"`
+}
+
+// EndpointParameter describes one parameter to an HTTP endpoint, lifted
+// out of the handler function's body. `Location` is `path` or `query`.
+// `TypeName` is the Go type of the value the handler binds — e.g. "string"
+// for c.Param, or the referenced struct for a container binding — spelled
+// as it appears in the source. Extraction is best-effort per framework;
+// fields left blank mean the extractor could not identify the type with
+// confidence.
+type EndpointParameter struct {
+	Name     string `json:"name"`
+	Location string `json:"location"`
+	TypeName string `json:"typeName,omitempty"`
 }
 type ExternalURL struct {
 	ID          string            `json:"id"`
